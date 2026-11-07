@@ -1,0 +1,239 @@
+rules_version = '2';
+
+// Mobile Shop OS — Firestore Security Rules (Phase 2, employees changed in Phase 11)
+//
+// MODEL
+//  - Default deny. Anything not matched below is denied.
+//  - ALL client writes are denied. Every write (sales, stock, members, ...) goes through trusted
+//    server code (Admin SDK bypasses rules) after requireTenantAccess().
+//  - Reads are allowed only for ACTIVE members of an ACTIVE tenant, by role, and (for branch-owned
+//    documents) only for branches the member may access.
+//  - The tenant is the PATH (tenants/{tenantId}/...), so ownership cannot be spoofed with a field.
+//
+// KEEP ROLE LISTS IN SYNC with src/lib/permissions/matrix.js (see docs/PERMISSIONS.md).
+//
+// COST NOTE: each get()/exists() is a billed read; repeated gets of the same path within one
+// request are counted once. Rules calls per request are limited (10 single-doc, 20 batch).
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function tenantDoc(tenantId) {
+      return /databases/$(database)/documents/tenants/$(tenantId);
+    }
+
+    function memberDoc(tenantId) {
+      return /databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid);
+    }
+
+    function isActiveMember(tenantId) {
+      return signedIn()
+        && exists(memberDoc(tenantId))
+        && get(memberDoc(tenantId)).data.status == 'ACTIVE'
+        && get(tenantDoc(tenantId)).data.status == 'ACTIVE';
+    }
+
+    function hasRole(tenantId, roles) {
+      return isActiveMember(tenantId) && get(memberDoc(tenantId)).data.role in roles;
+    }
+
+    function branchOk(tenantId, branchId) {
+      let m = get(memberDoc(tenantId)).data;
+      return m.get('allBranches', false) == true
+        || branchId in m.get('branchIds', []);
+    }
+
+    // role + branch scope for documents that carry a branchId.
+    // INVARIANT: every document in a branch-scoped collection MUST have a branchId field
+    // (the server always writes it). A document without it is denied to everyone (rules error).
+    // Rules are not filters: clients must query with where('branchId', '==', <allowed branch>).
+    function hasRoleInBranch(tenantId, roles, branchId) {
+      return hasRole(tenantId, roles) && branchOk(tenantId, branchId);
+    }
+
+    function isPlatformAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/platformAdmins/$(request.auth.uid));
+    }
+
+    // ---------- platform level ----------
+    match /platformUsers/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /platformAdmins/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    match /userTenants/{uid}/memberships/{tenantId} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Public plan data (pricing page). Only documents flagged isPublic are readable by anyone.
+    match /platformPlans/{planId} {
+      allow read: if resource.data.get('isPublic', false) == true || isPlatformAdmin();
+      allow write: if false;
+    }
+
+    // Applications: applicant reads own, platform admins read all. Creation is server-side in Phase 3.
+    match /tenantApplications/{applicationId} {
+      allow read: if signedIn()
+        && (resource.data.get('applicantUid', null) == request.auth.uid || isPlatformAdmin());
+      allow write: if false;
+    }
+
+    match /platformAuditLogs/{logId} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /platformSettings/{settingId} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    // ---------- tenant level ----------
+    match /tenants/{tenantId} {
+      allow read: if isActiveMember(tenantId);
+      allow write: if false;
+
+      // A member can read their own membership (even if suspended, so the UI can explain);
+      // OWNER/MANAGER can read all memberships. Nobody writes from the client.
+      match /members/{uid} {
+        allow get: if (signedIn() && request.auth.uid == uid)
+          || hasRole(tenantId, ['OWNER', 'MANAGER']);
+        allow list: if hasRole(tenantId, ['OWNER', 'MANAGER']);
+        allow write: if false;
+      }
+
+      match /branches/{branchId} {
+        allow read: if isActiveMember(tenantId);
+        allow write: if false;
+      }
+
+      // Catalogue: every active member
+      match /categories/{id} {
+        allow read: if isActiveMember(tenantId);
+        allow write: if false;
+      }
+      match /brands/{id} {
+        allow read: if isActiveMember(tenantId);
+        allow write: if false;
+      }
+      match /products/{id} {
+        allow read: if isActiveMember(tenantId);
+        allow write: if false;
+      }
+      match /productVariants/{id} {
+        allow read: if isActiveMember(tenantId);
+        allow write: if false;
+      }
+
+      // Stock and devices: all roles, branch-scoped
+      match /inventory/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'CASHIER', 'TECHNICIAN', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+      match /imeiRecords/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'CASHIER', 'TECHNICIAN', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+      match /stockMovements/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'CASHIER', 'TECHNICIAN', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+
+      // Sales side: branch-scoped
+      match /sales/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'CASHIER', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+      match /returns/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'CASHIER', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+      match /exchanges/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'CASHIER', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+
+      // Purchasing
+      match /purchases/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+      match /suppliers/{id} {
+        allow read: if hasRole(tenantId, ['OWNER', 'MANAGER', 'ACCOUNTANT']);
+        allow write: if false;
+      }
+
+      // Customers. Sensitive fields live ONLY in the private subdocument.
+      match /customers/{id} {
+        allow read: if hasRole(tenantId, ['OWNER', 'MANAGER', 'CASHIER', 'TECHNICIAN']);
+        allow write: if false;
+
+        match /private/{docId} {
+          allow read: if hasRole(tenantId, ['OWNER', 'MANAGER']);
+          allow write: if false;
+        }
+      }
+
+      match /repairJobs/{id} {
+        allow read: if hasRoleInBranch(tenantId,
+          ['OWNER', 'MANAGER', 'CASHIER', 'TECHNICIAN'], resource.data.branchId);
+        allow write: if false;
+      }
+
+      // Finance
+      match /expenses/{id} {
+        allow read: if hasRoleInBranch(tenantId, ['OWNER', 'MANAGER', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+      match /transactions/{id} {
+        allow read: if hasRoleInBranch(tenantId, ['OWNER', 'MANAGER', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+      match /aggregates/{id} {
+        allow read: if hasRoleInBranch(tenantId, ['OWNER', 'MANAGER', 'ACCOUNTANT'], resource.data.branchId);
+        allow write: if false;
+      }
+
+      // HR
+      // Staff records are branch-scoped (every employee document carries a branchId).
+      // attendance, leaveRequests, commissions and employeeLinks have no rule: server-only.
+      match /employees/{id} {
+        allow read: if hasRoleInBranch(tenantId, ['OWNER', 'MANAGER'], resource.data.branchId);
+        allow write: if false;
+      }
+
+      // Audit trail: owner only, append-only (written by the server)
+      match /auditLogs/{id} {
+        allow read: if hasRole(tenantId, ['OWNER']);
+        allow write: if false;
+      }
+
+      // Collections for later phases (installments, warranties, trade-ins, messages, ...)
+      // intentionally have NO rule yet => denied. Each phase adds its rules + tests.
+    }
+
+    // ---------- explicit catch-all ----------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

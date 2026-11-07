@@ -1,0 +1,62 @@
+rules_version = '2';
+
+// Mobile Shop OS — Storage Security Rules (Phase 2)
+//
+// Default deny. Paths are tenant-scoped: tenants/{tenantId}/...
+// Storage rules may make at most 2 Firestore lookups per evaluation, so membership is read with a
+// single firestore.get() and the tenant status with a second one. A missing member document makes
+// firestore.get() fail, which denies access.
+//
+// KEEP ROLE LISTS IN SYNC with src/lib/permissions/matrix.js.
+// NOTE [VERIFY]: confirm current Firebase plan requirements for Cloud Storage before enabling it.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function memberData(tenantId) {
+      return firestore.get(/databases/(default)/documents/tenants/$(tenantId)/members/$(request.auth.uid)).data;
+    }
+
+    function hasRole(tenantId, roles) {
+      return request.auth != null
+        && memberData(tenantId).status == 'ACTIVE'
+        && memberData(tenantId).role in roles
+        && firestore.get(/databases/(default)/documents/tenants/$(tenantId)).data.status == 'ACTIVE';
+    }
+
+    function isSmallImage() {
+      return request.resource != null
+        && request.resource.contentType.matches('image/(jpeg|png|webp)')
+        && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    function isPrivateDocument() {
+      return request.resource != null
+        && (request.resource.contentType.matches('image/(jpeg|png|webp)')
+            || request.resource.contentType == 'application/pdf')
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // Branding and product images: publicly readable (storefront), written by OWNER/MANAGER only.
+    match /tenants/{tenantId}/public/{allPaths=**} {
+      allow read: if true;
+      allow write: if hasRole(tenantId, ['OWNER', 'MANAGER']) && isSmallImage();
+    }
+
+    // Repair device photos
+    match /tenants/{tenantId}/repairs/{allPaths=**} {
+      allow read: if hasRole(tenantId, ['OWNER', 'MANAGER', 'CASHIER', 'TECHNICIAN']);
+      allow write: if hasRole(tenantId, ['OWNER', 'MANAGER', 'TECHNICIAN']) && isSmallImage();
+    }
+
+    // Sensitive documents (trade-in seller ID, supplier documents): OWNER/MANAGER only
+    match /tenants/{tenantId}/private/{allPaths=**} {
+      allow read: if hasRole(tenantId, ['OWNER', 'MANAGER']);
+      allow write: if hasRole(tenantId, ['OWNER', 'MANAGER']) && isPrivateDocument();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
