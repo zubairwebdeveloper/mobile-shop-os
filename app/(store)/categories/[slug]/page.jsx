@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
+import { PageSkeleton } from "@/components/shared/page-skeleton";
 import { PageHeader } from "@/components/shared/page-header";
 import { ProductGrid } from "@/components/product/product-grid";
 import { getByCategory, getCategories, getCategory } from "@/services/catalog";
@@ -13,7 +15,7 @@ export async function generateMetadata({ params }) {
   return category ? { title: category.name, description: category.text } : {};
 }
 
-export default async function CategoryPage({ params }) {
+async function CategoryContent({ params }) {
   const { slug } = await params;
   const category = getCategory(slug);
   if (!category) notFound();
@@ -30,5 +32,14 @@ export default async function CategoryPage({ params }) {
         <ProductGrid products={products} />
       </div>
     </>
+  );
+}
+
+// params ko Suspense ke andar resolve karte hain taake navigation instant rahe (Next 16 instant shell).
+export default function CategoryPage({ params }) {
+  return (
+    <Suspense fallback={<PageSkeleton variant="grid" />}>
+      <CategoryContent params={params} />
+    </Suspense>
   );
 }

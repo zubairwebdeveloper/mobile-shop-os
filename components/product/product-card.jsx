@@ -2,15 +2,18 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { Heart, ShoppingBag } from "lucide-react";
-import { toast } from "sonner";
+import { GitCompareArrows, Heart, ShoppingBag } from "lucide-react";
+import { useSelector } from "react-redux";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ProductImage } from "@/components/product/product-image";
 import { RatingStars } from "@/components/product/rating-stars";
 import { PriceTag } from "@/components/product/price-tag";
+import { useShoppingActions } from "@/hooks/use-cart-actions";
+import { cn } from "@/lib/utils";
 import { getBrandName } from "@/services/catalog";
+import { useHydrated } from "@/hooks/use-hydrated";
 
 function stockLabel(stock) {
   if (stock <= 0) return { text: "Out of stock", tone: "text-destructive" };
@@ -21,9 +24,13 @@ function stockLabel(stock) {
 export function ProductCard({ product }) {
   const reduce = useReducedMotion();
   const stock = stockLabel(product.stock);
-
-  // Cart & wishlist state aa'ega Phase 03 mein; ab honest feedback dete hain.
-  const notReady = (what) => toast.info(`${what} will be enabled in the shopping-system phase.`);
+  const { addToCart, toggleWish, toggleComparison } = useShoppingActions();
+  const ready = useHydrated();
+  const wishedStored = useSelector((s) => s.wishlist.ids.includes(product.id));
+  const slots = useSelector((s) => s.comparison.slots);
+  const wished = ready && wishedStored;
+  const compared = ready && slots.includes(product.id);
+  const canCompare = product.category === "smartphones";
 
   return (
     <motion.div
@@ -46,15 +53,30 @@ export function ProductCard({ product }) {
               {product.badge}
             </Badge>
           )}
-          <Button
-            variant="outline"
-            size="icon-sm"
-            className="absolute top-3 right-3 z-10 rounded-full bg-card/90 backdrop-blur"
-            aria-label={`Add ${product.name} to wishlist`}
-            onClick={() => notReady("Wishlist")}
-          >
-            <Heart />
-          </Button>
+          <div className="absolute top-3 right-3 z-10 flex flex-col gap-2">
+            <Button
+              variant="outline"
+              size="icon-sm"
+              className="rounded-full bg-card/90 backdrop-blur"
+              aria-label={wished ? `Remove ${product.name} from wishlist` : `Add ${product.name} to wishlist`}
+              aria-pressed={wished}
+              onClick={() => toggleWish(product, wished)}
+            >
+              <Heart className={cn(wished && "fill-destructive text-destructive")} />
+            </Button>
+            {canCompare && (
+              <Button
+                variant="outline"
+                size="icon-sm"
+                className={cn("rounded-full bg-card/90 backdrop-blur", compared && "border-primary text-primary")}
+                aria-label={compared ? `Remove ${product.name} from comparison` : `Compare ${product.name}`}
+                aria-pressed={compared}
+                onClick={() => toggleComparison(product, slots)}
+              >
+                <GitCompareArrows />
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-1 flex-col gap-2.5 p-4">
@@ -64,7 +86,7 @@ export function ProductCard({ product }) {
           </p>
           <Link
             href={`/product/${product.slug}`}
-            className="font-heading text-base leading-snug font-bold after:absolute after:inset-0 after:content-[''] after:z-0 hover:text-primary"
+            className="font-heading text-base leading-snug font-bold after:absolute after:inset-0 after:z-0 after:content-[''] hover:text-primary"
           >
             {product.name}
           </Link>
@@ -76,7 +98,7 @@ export function ProductCard({ product }) {
               size="sm"
               className="relative z-10"
               disabled={product.stock <= 0}
-              onClick={() => notReady("Add to cart")}
+              onClick={() => addToCart(product)}
               aria-label={`Add ${product.name} to cart`}
             >
               <ShoppingBag /> Add

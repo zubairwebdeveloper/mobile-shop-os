@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowLeft, SearchX } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
-import { Footer } from "@/components/layout/footer";
+
 import { cn } from "@/lib/utils";
 
 export const metadata = { title: "Page not found" };
@@ -24,7 +24,6 @@ export default function NotFound() {
           </Link>
         </div>
       </main>
-      <Footer />
     </div>
   );
 }

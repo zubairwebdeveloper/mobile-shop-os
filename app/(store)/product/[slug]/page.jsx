@@ -1,4 +1,6 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
+import { PageSkeleton } from "@/components/shared/page-skeleton";
 import { PageHeader } from "@/components/shared/page-header";
 import { ProductDetail } from "@/components/product/product-detail";
 import { ProductGrid } from "@/components/product/product-grid";
@@ -15,7 +17,7 @@ export async function generateMetadata({ params }) {
   return product ? { title: product.name, description: product.summary } : {};
 }
 
-export default async function ProductPage({ params }) {
+async function ProductContent({ params }) {
   const { slug } = await params;
   const product = getProductBySlug(slug);
   if (!product) notFound();
@@ -41,5 +43,14 @@ export default async function ProductPage({ params }) {
         )}
       </div>
     </>
+  );
+}
+
+// params ko Suspense ke andar resolve karte hain taake navigation instant rahe (Next 16 instant shell).
+export default function ProductPage({ params }) {
+  return (
+    <Suspense fallback={<PageSkeleton variant="detail" />}>
+      <ProductContent params={params} />
+    </Suspense>
   );
 }

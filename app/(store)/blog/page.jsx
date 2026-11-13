@@ -1,25 +1,59 @@
+import Link from "next/link";
+import { Suspense } from "react";
+import { notFound } from "next/navigation";
+import { PageSkeleton } from "@/components/shared/page-skeleton";
+import { ArrowLeft, Clock } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
-import { PostCard } from "@/components/blog/post-card";
-import { getPosts } from "@/services/catalog";
+import { formatDate } from "@/lib/utils/format";
+import { getPost, getPosts } from "@/services/catalog";
 
-export const metadata = {
-  title: "Blog",
-  description: "Smartphone buying guides, care tips and tech news.",
-};
+export function generateStaticParams() {
+  return getPosts().map((p) => ({ slug: p.slug }));
+}
 
-export default function BlogPage() {
+export async function generateMetadata({ params }) {
+  const { slug } = await params;
+  const post = getPost(slug);
+  return post ? { title: post.title, description: post.excerpt } : {};
+}
+
+async function BlogPostContent({ params }) {
+  const { slug } = await params;
+  const post = getPost(slug);
+  if (!post) notFound();
+
   return (
     <>
-      <PageHeader
-        title="Technology blog"
-        description="Guides and tips to help you buy, use and care for your devices."
-        crumbs={[{ label: "Blog" }]}
-      />
-      <div className="container-page grid gap-5 py-10 md:grid-cols-2 lg:grid-cols-3">
-        {getPosts().map((post) => (
-          <PostCard key={post.slug} post={post} />
-        ))}
-      </div>
+      <PageHeader title={post.title} crumbs={[{ label: "Blog", href: "/blog" }, { label: post.category }]}>
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+          <Badge variant="secondary">{post.category}</Badge>
+          <span>{formatDate(post.date)}</span>
+          <span className="flex items-center gap-1">
+            <Clock className="size-4" /> {post.readTime} min read
+          </span>
+        </div>
+      </PageHeader>
+      <article className="container-page max-w-3xl py-10">
+        <p className="text-lg text-muted-foreground">{post.excerpt}</p>
+        <div className="mt-6 space-y-5 text-base leading-relaxed">
+          {post.body.map((para, i) => (
+            <p key={i}>{para}</p>
+          ))}
+        </div>
+        <Link href="/blog" className="mt-10 inline-flex items-center gap-2 text-sm font-semibold text-primary hover:underline">
+          <ArrowLeft className="size-4" /> Back to all articles
+        </Link>
+      </article>
     </>
+  );
+}
+
+// params ko Suspense ke andar resolve karte hain taake navigation instant rahe (Next 16 instant shell).
+export default function BlogPostPage({ params }) {
+  return (
+    <Suspense fallback={<PageSkeleton variant="grid" />}>
+      <BlogPostContent params={params} />
+    </Suspense>
   );
 }
